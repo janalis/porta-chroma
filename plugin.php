@@ -2,11 +2,8 @@
 
 declare(strict_types=1);
 
-use Porta\Plugin\Api\AbstractToolPlugin;
+use Porta\Plugin\Api\AbstractSubprocessHighlighter;
 use Porta\Plugin\Api\PluginApi;
-use Porta\Support\AsyncProcess;
-use Revolt\EventLoop;
-use Tempest\Highlight\TerminalTheme;
 use Tempest\Highlight\Tokens\TokenTypeEnum;
 
 /**
@@ -23,11 +20,17 @@ use Tempest\Highlight\Tokens\TokenTypeEnum;
  * ANSI, so Porta keeps control of its own theme. chroma's token values
  * concatenate back to the source byte for byte, so no offsets are needed.
  *
+ * The debounce, the latest-wins guard, the concurrency ceiling and the token →
+ * ANSI conversion all live in {@see AbstractSubprocessHighlighter}: scheduling
+ * work on the typing path is exactly the kind of code that belongs under the
+ * coverage gate rather than in a plugin file. What is left here is chroma's own
+ * truth — its lexer arguments and its type-name table.
+ *
  * It deliberately does **not** register token spans for project search: search
  * classifies every matched file, so a 500-hit search would mean 500
  * subprocesses.
  */
-return new class('chroma', 'chroma') extends AbstractToolPlugin {
+return new class('chroma', 'chroma') extends AbstractSubprocessHighlighter {
     /** Pygments-ish type-name prefix => Porta token type, longest prefix first. */
     private const array TOKEN_MAP = [
         'LiteralStringEscape' => TokenTypeEnum::LITERAL,
@@ -56,121 +59,19 @@ return new class('chroma', 'chroma') extends AbstractToolPlugin {
         'Literal' => TokenTypeEnum::LITERAL,
     ];
 
-    /** @var array<string, string> language => pending debounce timer id */
-    private array $timers = [];
-
-    /** @var array<string, int> language => newest dispatched sequence */
-    private array $latest = [];
-
-    private int $sequence = 0;
-    private int $running = 0;
-
-    /** Hard ceiling on concurrent chroma processes across every language. */
-    private const int MAX_CONCURRENT = 2;
-
     public function activate(PluginApi $api): void
     {
         $this->registerBinarySetting($api, [['brew', 'chroma']]);
-        $api->registerSetting('languages', 'Languages', 'text', 'rust,go,ruby,elixir,zig', hint: 'comma-separated grammar names, or * for all');
-        $api->registerSetting('debounce', 'Debounce (ms)', 'int', 250);
-        $api->registerSetting('maxBytes', 'Skip files larger than (bytes)', 'int', 262_144);
-
-        $theme = $api->syntaxTheme();
-        $api->registerHighlighter(
-            'Chroma',
-            fn (): array => $this->claimedLanguages($api),
-            function (string $text, string $language, Closure $deliver) use ($api, $theme): void {
-                $this->schedule($api, $theme, $text, $language, $deliver);
-            },
-            isAvailable: $this->binaryAvailable($api),
-        );
+        $this->registerSubprocessHighlighter($api, 'Chroma', 'rust,go,ruby,elixir,zig');
     }
 
-    /**
-     * Debounce, then run at most one chroma per language. A newer request
-     * replaces a pending one outright rather than queueing: intermediate
-     * keystrokes are worthless once a later version exists.
-     */
-    private function schedule(PluginApi $api, TerminalTheme $theme, string $text, string $language, Closure $deliver): void
+    protected function lexerArgs(string $language): array
     {
-        if (\strlen($text) > (int) $api->setting('maxBytes')) {
-            return; // too big to be worth a subprocess; Porta keeps its current paint
-        }
-
-        $pending = $this->timers[$language] ?? null;
-        if (null !== $pending) {
-            EventLoop::cancel($pending);
-        }
-
-        $sequence = ++$this->sequence;
-        $this->latest[$language] = $sequence;
-
-        $delay = max(0, (int) $api->setting('debounce')) / 1000;
-        $this->timers[$language] = EventLoop::delay($delay, function () use ($api, $theme, $text, $language, $deliver, $sequence): void {
-            unset($this->timers[$language]);
-            $this->run($api, $theme, $text, $language, $deliver, $sequence);
-        });
+        return ['-f', 'json', '--lexer', $language];
     }
 
-    private function run(PluginApi $api, TerminalTheme $theme, string $text, string $language, Closure $deliver, int $sequence): void
+    protected function tokenMap(): array
     {
-        $binary = $this->binary($api);
-        if (null === $binary || $this->running >= self::MAX_CONCURRENT) {
-            return;
-        }
-
-        ++$this->running;
-        new AsyncProcess([$binary, '-f', 'json', '--lexer', $language], $api->projectRoot(), stdin: $text)
-            ->start(function (int $code, string $stdout) use ($theme, $language, $deliver, $sequence): void {
-                --$this->running;
-                if (0 !== $code || ($this->latest[$language] ?? 0) !== $sequence) {
-                    return; // failed, or a newer version superseded this run
-                }
-                $markup = $this->toAnsi($stdout, $theme);
-                if (null !== $markup) {
-                    $deliver($markup);
-                }
-            });
-    }
-
-    /** chroma's JSON token stream as ANSI, or null when it isn't usable. */
-    private function toAnsi(string $json, TerminalTheme $theme): ?string
-    {
-        try {
-            $tokens = json_decode($json, associative: true, flags: \JSON_THROW_ON_ERROR);
-        } catch (\JsonException) {
-            return null;
-        }
-        if (!\is_array($tokens)) {
-            return null;
-        }
-
-        $markup = '';
-        foreach ($tokens as $token) {
-            if (!\is_array($token)) {
-                return null;
-            }
-            $value = \is_string($token['value'] ?? null) ? $token['value'] : '';
-            $type = $this->tokenType(\is_string($token['type'] ?? null) ? $token['type'] : '');
-            $markup .= null === $type ? $value : $theme->before($type).$value.$theme->after($type);
-        }
-
-        return $markup;
-    }
-
-    /**
-     * Pygments type names are a flattened hierarchy (`NameFunction` is
-     * `Name.Function`), so match by longest prefix — an exact-match table would
-     * leave most of chroma's 297 lexers uncoloured.
-     */
-    private function tokenType(string $name): ?TokenTypeEnum
-    {
-        foreach (self::TOKEN_MAP as $prefix => $type) {
-            if (str_starts_with($name, $prefix)) {
-                return $type;
-            }
-        }
-
-        return null; // Text, Error, Other, and anything unmapped: leave it plain
+        return self::TOKEN_MAP;
     }
 };
