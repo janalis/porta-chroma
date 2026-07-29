@@ -2,11 +2,10 @@
 
 declare(strict_types=1);
 
+use Porta\Plugin\Api\AbstractToolPlugin;
 use Porta\Plugin\Api\PluginApi;
-use Porta\Plugin\Api\PortaPlugin;
 use Porta\Support\AsyncProcess;
 use Revolt\EventLoop;
-use Symfony\Component\Process\ExecutableFinder;
 use Tempest\Highlight\TerminalTheme;
 use Tempest\Highlight\Tokens\TokenTypeEnum;
 
@@ -28,7 +27,7 @@ use Tempest\Highlight\Tokens\TokenTypeEnum;
  * classifies every matched file, so a 500-hit search would mean 500
  * subprocesses.
  */
-return new class implements PortaPlugin {
+return new class('chroma', 'chroma') extends AbstractToolPlugin {
     /** Pygments-ish type-name prefix => Porta token type, longest prefix first. */
     private const array TOKEN_MAP = [
         'LiteralStringEscape' => TokenTypeEnum::LITERAL,
@@ -57,10 +56,6 @@ return new class implements PortaPlugin {
         'Literal' => TokenTypeEnum::LITERAL,
     ];
 
-    /** Cached binary lookup: this is on the typing path, unlike a command handler. */
-    private ?string $binary = null;
-    private bool $binaryResolved = false;
-
     /** @var array<string, string> language => pending debounce timer id */
     private array $timers = [];
 
@@ -73,19 +68,12 @@ return new class implements PortaPlugin {
     /** Hard ceiling on concurrent chroma processes across every language. */
     private const int MAX_CONCURRENT = 2;
 
-    public function name(): string
-    {
-        return 'chroma';
-    }
-
     public function activate(PluginApi $api): void
     {
-        $api->registerSetting('binary', 'Chroma binary', 'text', '', hint: 'empty = vendor/bin, then PATH');
+        $this->registerBinarySetting($api, [['brew', 'chroma']]);
         $api->registerSetting('languages', 'Languages', 'text', 'rust,go,ruby,elixir,zig', hint: 'comma-separated grammar names, or * for all');
         $api->registerSetting('debounce', 'Debounce (ms)', 'int', 250);
         $api->registerSetting('maxBytes', 'Skip files larger than (bytes)', 'int', 262_144);
-
-        $api->registerInstaller('chroma', fn (): bool => null !== $this->binary($api), [['brew', 'chroma']]);
 
         $theme = $api->syntaxTheme();
         $api->registerHighlighter(
@@ -94,16 +82,8 @@ return new class implements PortaPlugin {
             function (string $text, string $language, Closure $deliver) use ($api, $theme): void {
                 $this->schedule($api, $theme, $text, $language, $deliver);
             },
-            isAvailable: fn (): bool => null !== $this->binary($api),
+            isAvailable: $this->binaryAvailable($api),
         );
-    }
-
-    /** @return list<string> */
-    private function claimedLanguages(PluginApi $api): array
-    {
-        $raw = trim((string) $api->setting('languages'));
-
-        return '' === $raw ? [] : array_values(array_filter(array_map(trim(...), explode(',', $raw))));
     }
 
     /**
@@ -192,26 +172,5 @@ return new class implements PortaPlugin {
         }
 
         return null; // Text, Error, Other, and anything unmapped: leave it plain
-    }
-
-    /** Setting → project vendor/bin → PATH, memoised. */
-    private function binary(PluginApi $api): ?string
-    {
-        if ($this->binaryResolved) {
-            return $this->binary;
-        }
-        $this->binaryResolved = true;
-
-        $configured = trim((string) $api->setting('binary'));
-        if ('' !== $configured) {
-            return $this->binary = $configured;
-        }
-
-        $vendor = $api->projectRoot().'/vendor/bin/chroma';
-        if (is_file($vendor) && is_executable($vendor)) {
-            return $this->binary = $vendor;
-        }
-
-        return $this->binary = new ExecutableFinder()->find('chroma');
     }
 };
