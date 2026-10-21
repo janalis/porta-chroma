@@ -1,0 +1,26 @@
+{
+    "name": "porta/chroma",
+    "description": "Syntax highlighting through the chroma command-line highlighter",
+    "type": "porta-plugin",
+    "license": "MIT",
+    "require": {
+        "php": ">=8.5"
+    },
+    "extra": {
+        "porta": {
+            "tools": [
+                {
+                    "name": "chroma",
+                    "purpose": "the highlighter",
+                    "setting": "binary",
+                    "sources": [
+                        [
+                            "brew",
+                            "chroma"
+                        ]
+                    ]
+                }
+            ]
+        }
+    }
+}

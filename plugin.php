@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use Porta\Plugin\Api\AbstractSubprocessHighlighter;
+use Porta\Plugin\Api\BinarySearch;
 use Porta\Plugin\Api\PluginApi;
 use Tempest\Highlight\Tokens\TokenTypeEnum;
 
@@ -30,7 +31,7 @@ use Tempest\Highlight\Tokens\TokenTypeEnum;
  * classifies every matched file, so a 500-hit search would mean 500
  * subprocesses.
  */
-return new class('chroma', 'chroma') extends AbstractSubprocessHighlighter {
+return new class('chroma', 'chroma', BinarySearch::PathOnly) extends AbstractSubprocessHighlighter {
     /** Pygments-ish type-name prefix => Porta token type, longest prefix first. */
     private const array TOKEN_MAP = [
         'LiteralStringEscape' => TokenTypeEnum::LITERAL,
@@ -61,7 +62,7 @@ return new class('chroma', 'chroma') extends AbstractSubprocessHighlighter {
 
     public function activate(PluginApi $api): void
     {
-        $this->registerBinarySetting($api, [['brew', 'chroma']]);
+        $this->registerBinarySetting($api);
         $this->registerSubprocessHighlighter($api, 'Chroma', 'rust,go,ruby,elixir,zig');
     }
 
