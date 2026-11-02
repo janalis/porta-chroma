@@ -5,6 +5,8 @@ Go highlighter with close to three hundred lexers — for the languages Porta's
 own engine has no grammar for. Bundled with Porta and off by default — turn it
 on under **Settings → Plugins → chroma**.
 
+![The chroma page in Settings → Plugins](/screenshots/plugin-chroma.svg)
+
 Chroma runs as a separate process, which costs 40–70 ms a run: Porta asks for
 the colours and repaints when they arrive, after a short pause in your typing.
 That is why it claims only Rust, Go, Ruby, Elixir and Zig by default. Point
