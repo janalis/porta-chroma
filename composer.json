@@ -1,5 +1,5 @@
 {
-    "name": "porta/chroma",
+    "name": "janalis/porta-chroma",
     "description": "Syntax highlighting through the chroma command-line highlighter",
     "type": "porta-plugin",
     "license": "MIT",
