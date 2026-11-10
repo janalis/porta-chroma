@@ -2,6 +2,8 @@
 
 Syntax highlighting through the chroma command-line highlighter.
 
+![The chroma page in Settings → Plugins](https://janalis.github.io/porta/screenshots/plugin-chroma.svg)
+
 This is `janalis/porta-chroma`, one of the plugins bundled with
 [Porta](https://github.com/janalis/porta), the terminal IDE for PHP. Porta
 ships it already: turn it on under **Settings → Plugins**. Install this
